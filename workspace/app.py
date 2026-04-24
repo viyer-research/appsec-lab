@@ -430,6 +430,67 @@ def charge_card(amount_cents: int, currency: str = "usd", description: Optional[
 # Paste Copilot's code below this comment, then find and fix the vulnerability.
 
 # YOUR CODE HERE
+# ...existing code...
+import subprocess
+import re
+from flask import request
+
+@app.route("/ping", methods=["POST"])
+def ping():
+    """Ping a hostname supplied by the user and return the output."""
+    hostname = request.form.get("hostname", "").strip()
+    if not hostname:
+        return {"error": "hostname required"}, 400
+
+    # Allow only letters, digits, dots and hyphens (basic hostname / IPv4)
+    if not re.match(r"^[A-Za-z0-9.\-]{1,253}$", hostname):
+        return {"error": "invalid hostname format"}, 400
+
+    try:
+        result = subprocess.run(
+            ["ping", "-c", "4", hostname],
+            shell=False,
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        # Truncate long output to keep responses bounded
+        out = (result.stdout or "")[:2000]
+        err = (result.stderr or "")[:2000]
+        return {"output": out, "error": err, "returncode": result.returncode}, 200
+    except subprocess.TimeoutExpired:
+        return {"error": "ping timed out"}, 504
+    except Exception as e:
+        return {"error": str(e)}, 500
+
+# FIXED CODE
+import subprocess
+import re
+from flask import request
+
+@app.route("/ping", methods=["POST"])
+def ping():
+    hostname = request.form.get("hostname", "")
+
+    # Layer 1: Input Validation (Regex Allowlist)
+    # Allows only alphanumeric, dots, and hyphens (standard hostname chars)
+    if not re.match(r"^[a-zA-Z0-9.\-]{1,253}$", hostname):
+        return {"error": "Invalid hostname format"}, 400
+
+    try:
+        # Layer 2: Secure Execution (List format + shell=False)
+        result = subprocess.run(
+            ["ping", "-c", "4", hostname],
+            shell=False,
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        return {"output": result.stdout, "error": result.stderr}, 200
+    except subprocess.TimeoutExpired:
+        return {"error": "Ping timed out"}, 504
+    except Exception as e:
+        return {"error": str(e)}, 500
 
 
 # ── Lab 07: XXE Injection ────────────────────────────────────────────────────
