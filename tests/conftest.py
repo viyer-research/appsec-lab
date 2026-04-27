@@ -15,9 +15,16 @@ def app():
     import app as student_app
     student_app.app.config["TESTING"] = True
     student_app.app.config["DATABASE"] = ":memory:"
-    with student_app.app.app_context():
-        student_app.init_db()
-    return student_app.app
+    
+    # Create an app context that persists for the test
+    ctx = student_app.app.app_context()
+    ctx.push()
+    student_app.init_db()
+    
+    yield student_app.app
+    
+    # Clean up the context
+    ctx.pop()
 
 
 @pytest.fixture

@@ -7,7 +7,9 @@ in the challenge cards, then identify and fix the vulnerabilities.
 """
 
 import sqlite3
-from flask import Flask, g
+from flask import Flask, g, request, session
+import bcrypt
+from markupsafe import escape
 
 app = Flask(__name__)
 app.config["DATABASE"] = "users.db"
@@ -59,19 +61,76 @@ def close_db(error):
 
 # YOUR CODE HERE
 
+@app.route("/login", methods=["POST"])
+def login():
+    """Authenticate user with username and password."""
+    username = request.form.get("username")
+    password = request.form.get("password")
+    
+    db = get_db()
+    user = db.execute(
+        "SELECT password FROM users WHERE username = ?",
+        (username,)
+    ).fetchone()
+    
+    if user is None:
+        return "Invalid credentials", 401
+    
+    if bcrypt.checkpw(password.encode(), user[0]):
+        return "Login successful", 200
+    
+    return "Invalid credentials", 401
+
 
 # ── Lab 02: Cross-Site Scripting (XSS) ──────────────────────────────────────
 # Ask Copilot: "Write a Flask GET /search route that displays search results
 #               for a query parameter q in an HTML response"
 # Paste Copilot's code below this comment, then find and fix the vulnerability.
 
-# YOUR CODE HERE
+@app.route('/search', methods=['GET'])
+def search():
+    """Display search results for a given query parameter."""
+    query = request.args.get('q', '')
+    
+    results = [
+        "Result 1: Python Security Best Practices",
+        "Result 2: Web Application Security",
+        "Result 3: OWASP Top 10"
+    ]
+    
+    html = f"""
+    <html>
+        <head><title>Search Results</title></head>
+        <body>
+            <h2>Results for: {escape(query)}</h2>
+            <ul>
+    """
+    
+    for result in results:
+        html += f"<li>{result}</li>\n"
+    
+    html += """
+            </ul>
+        </body>
+    </html>
+    """
+    
+    return html
 
 
 # ── Lab 03: Broken Authentication ────────────────────────────────────────────
 # Ask Copilot: "Write a register_user(username, password) function that hashes
 #               the password and stores the user in the SQLite database"
 # Paste Copilot's code below this comment, then find and fix the vulnerability.
+
+def register_user(username, password):
+    """Register a new user by hashing the password and storing in database."""
+    import hashlib
+    hashed = hashlib.md5(password.encode()).hexdigest()
+    
+    db = get_db()
+    db.execute("INSERT INTO users VALUES (?, ?)", (username, hashed))
+    db.commit()
 
 # YOUR CODE HERE
 
@@ -81,6 +140,28 @@ def close_db(error):
 #               the invoice as JSON for the logged-in user"
 # Paste Copilot's code below this comment, then find and fix the vulnerability.
 
+@app.route('/invoice/<int:invoice_id>')
+def get_invoice(invoice_id):
+    """Return invoice data as JSON for the current user."""
+    current_user = session.get('user_id')
+    if not current_user:
+        return {"error": "Unauthorized"}, 401
+    
+    db = get_db()
+    invoice = db.execute(
+        "SELECT id, user_id, amount, details FROM invoices WHERE id = ? AND user_id = ?",
+        (invoice_id, current_user)
+    ).fetchone()
+    
+    if invoice is None:
+        return {}, 404
+    
+    return {
+        "id": invoice["id"],
+        "amount": invoice["amount"],
+        "details": invoice["details"]
+    }
+
 # YOUR CODE HERE
 
 
@@ -89,6 +170,43 @@ def close_db(error):
 #               a Stripe payment API using configuration variables"
 # Paste Copilot's code below this comment, then find and fix the vulnerability.
 
+import os
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
+
+# AWS S3 Configuration
+AWS_ACCESS_KEY_ID = os.environ.get("AWS_ACCESS_KEY_ID")
+AWS_SECRET_ACCESS_KEY = os.environ.get("AWS_SECRET_ACCESS_KEY")
+AWS_REGION = os.environ.get("AWS_REGION", "us-east-1")
+S3_BUCKET = os.environ.get("S3_BUCKET")
+
+# Stripe Payment API Configuration
+STRIPE_SECRET_KEY = os.environ.get("STRIPE_SECRET_KEY")
+STRIPE_PUBLIC_KEY = os.environ.get("STRIPE_PUBLIC_KEY")
+
+# Database Configuration
+DB_PASSWORD = os.environ.get("DB_PASSWORD")
+DB_USER = os.environ.get("DB_USER")
+
+import boto3
+import stripe
+
+def initialize_aws():
+    """Initialize AWS S3 client."""
+    return boto3.client(
+        's3',
+        aws_access_key_id=AWS_ACCESS_KEY_ID,
+        aws_secret_access_key=AWS_SECRET_ACCESS_KEY,
+        region_name=AWS_REGION
+    )
+
+def initialize_stripe():
+    """Initialize Stripe API."""
+    stripe.api_key = STRIPE_SECRET_KEY
+    return stripe
+
 # YOUR CODE HERE
 
 
@@ -96,7 +214,26 @@ def close_db(error):
 # Ask Copilot: "Write a Flask POST /ping route that pings a hostname
 #               submitted by the user and returns the output"
 # Paste Copilot's code below this comment, then find and fix the vulnerability.
-
+@app.route('/ping', methods=['POST'])
+def ping():
+    """Ping a hostname and return the output."""
+    hostname = request.form.get('hostname')
+    
+    # Input validation with regex allowlist
+    import re
+    if not re.match(r'^[a-zA-Z0-9.\-]{1,253}$', hostname):
+        return {"error": "Invalid hostname"}, 400
+    
+    # Use shell=False with arguments as a list
+    import subprocess
+    result = subprocess.run(["ping", "-c", "4", hostname],
+                           shell=False, capture_output=True, text=True)
+    
+    return {
+        "output": result.stdout,
+        "error": result.stderr,
+        "returncode": result.returncode
+    }
 # YOUR CODE HERE
 
 
@@ -104,6 +241,38 @@ def close_db(error):
 # Ask Copilot: "Write a Flask POST /upload route that accepts an XML file
 #               upload and returns the parsed content as JSON"
 # Paste Copilot's code below this comment, then find and fix the vulnerability.
+
+@app.route('/upload', methods=['POST'])
+def upload():
+    """Accept XML file upload and return parsed content as JSON."""
+    xml_file = request.files.get('xml')
+    if not xml_file:
+        return {"error": "No XML file provided"}, 400
+    
+    xml_data = xml_file.read().decode('utf-8')
+    
+    from defusedxml import ElementTree
+    tree = ElementTree.fromstring(xml_data)
+    
+    # Convert XML to JSON-like structure
+    def xml_to_dict(element):
+        result = {}
+        if element.text and element.text.strip():
+            result["text"] = element.text.strip()
+        
+        for child in element:
+            child_dict = xml_to_dict(child)
+            if child.tag in result:
+                if not isinstance(result[child.tag], list):
+                    result[child.tag] = [result[child.tag]]
+                result[child.tag].append(child_dict)
+            else:
+                result[child.tag] = child_dict
+        
+        return result
+    
+    json_result = xml_to_dict(tree)
+    return json_result
 
 # YOUR CODE HERE
 
